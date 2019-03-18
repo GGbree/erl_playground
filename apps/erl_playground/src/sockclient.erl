@@ -150,5 +150,5 @@ process_packet(#req{ type = Type } = Req, State, _Now)
             message = Message
         }
     } = Req,
-    _ = lager:info("server_message received: ~p", [binary_to_list(Message)]),
+    _ = lager:info("server_message received: ~s", [binary_to_list(Message)]),
     State.
