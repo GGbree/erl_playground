@@ -1,0 +1,8 @@
+-sname erl_playground_client
+
+-setcookie erl_playground_client_cookie
+
+-config /appserver/erl_playground/config/client
+
++K true
++A30

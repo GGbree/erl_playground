@@ -30,7 +30,8 @@
 
 -record(state, {
     socket :: any(), %ranch_transport:socket(),
-    transport
+    transport,
+    username :: list()
 }).
 -type state() :: #state{}.
 
@@ -97,8 +98,8 @@ init(Ref, Socket, Transport, [_ProxyProtocol]) ->
 %% we can use the -behaviour(gen_server) attribute.
 init([]) -> {ok, undefined}.
 
-handle_cast(Message, State) ->
-    _ = lager:notice("unknown handle_cast ~p", [Message]),
+handle_cast(Request, State) ->
+    _ = lager:notice("unknown handle_cast ~p", [Request]),
     {noreply, State}.
 
 handle_info({tcp, _Port, <<>>}, State) ->
@@ -107,10 +108,10 @@ handle_info({tcp, _Port, <<>>}, State) ->
 handle_info({tcp, _Port, Packet}, State = {ok, #state{socket = Socket}}) ->
     Req = utils:open_envelope(Packet),
 
-    State = process_packet(Req, State, utils:unix_timestamp()),
+    NewState = process_packet(Req, State, utils:unix_timestamp()),
     ok = inet:setopts(Socket, [{active, once}]),
 
-    {noreply, State};
+    {noreply, NewState};
 handle_info({tcp_closed, _Port}, State) ->
     {stop, normal, State};
 handle_info(Message, State) ->
@@ -135,11 +136,60 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
+sendResponse(create, State = {ok, #state{socket = Socket, transport = Transport}}) ->
+    Response = #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = stringRespond(menu,State)
+        }
+    },
+    Data = utils:add_envelope(Response),
+    Transport:send(Socket,Data),
+    lager:info("sending ~p", [Response]),
+    ok;
+sendResponse(<<"1">>, State = {ok, #state{socket = Socket, transport = Transport}}) ->
+    Response = #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = stringRespond(weather,State)
+        }
+    },
+    Data = utils:add_envelope(Response),
+    Transport:send(Socket,Data),
+    lager:info("sending ~p", [Response]),
+    ok;
+sendResponse(<<"2">>, State = {ok, #state{socket = Socket, transport = Transport}}) ->
+    Response = #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = stringRespond(answer,State)
+        }
+    },
+    Data = utils:add_envelope(Response),
+    Transport:send(Socket,Data),
+    lager:info("sending ~p", [Response]),
+    ok.
+
+stringRespond(menu, {ok, #state{username = Username}}) ->
+    T1 = <<"Hello ">>,
+    T2 = <<", this is an automatic responder:\nSend 1 to recieve the weather forecast\nSend 2 to recieve the answer to the ultimate question of Life, the Universe and Everything\nSend 3 to contact an operator\nSend 4 to repete this message">>,
+    [T1, Username, T2];
+
+stringRespond(weather, _State) ->
+    List = ["sunny", "rainy", "cloudy", "stormy"],
+    list_to_binary(lists:nth(rand:uniform(length(List)), List));
+
+stringRespond(answer, _State) ->
+    <<"The answer to the ultimate question of Life, the Universe and Everything is...\n42">>;
+
+stringRespond(_, _State) ->
+    <<"Command not understood">>.
+
 -spec process_packet(Req :: #req{}, State :: state(), Now :: integer()) -> NewState :: state().
 process_packet(undefined, State, _Now) ->
     _ = lager:notice("client sent invalid packet, ignoring ~p",[State]),
     State;
-process_packet(#req{ type = Type } = Req, State = {ok, #state{socket = Socket, transport = Transport}}, _Now)
+process_packet(#req{ type = Type } = Req, {ok, #state{socket = Socket, transport = Transport, username = undefined}}, _Now)
     when Type =:= create_session ->
     #req{
         create_session_data = #create_session {
@@ -147,14 +197,20 @@ process_packet(#req{ type = Type } = Req, State = {ok, #state{socket = Socket, t
         }
     } = Req,
     _ = lager:info("create_session received from ~p", [UserName]),
-
-    Response = #req{
-        type = server_message,
+    NewState = {ok, #state{
+        socket = Socket,
+        transport = Transport,
+        username = binary_to_list(UserName)
+    }},
+    sendResponse(create,NewState),
+    NewState;
+process_packet(#req{ type = Type } = Req, State, _Now)
+    when Type =:= server_message ->
+    #req{
         server_message_data = #server_message {
-            message = <<"OK">>
+            message = Message
         }
-    },
-    Data = utils:add_envelope(Response),
-    Transport:send(Socket,Data),
-
+    } = Req,
+    lager:info("client message:~p", [Message]),
+    sendResponse(Message, State),
     State.

@@ -42,6 +42,7 @@ start_link() ->
 
 init(_Args) ->
     {ok, Init} = application:get_env(erl_playground, boot_mode),
+    lager:info("boot mode chosen ~p", [Init]),
     boot(Init),
 
     {ok, #state {

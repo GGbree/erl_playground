@@ -8,8 +8,7 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/0]). -ignore_xref([{start_link, 4}]).
--export([connect/0, disconnect/0]).
--export([send_create_session/0]).
+-export([connect/0, send/1, disconnect/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -44,6 +43,23 @@ start_link() ->
 -spec connect() -> ok.
 connect() ->
     gen_server:call(whereis(?SERVER), connect),
+    CreateSession = #create_session {
+        username = <<"TestUser">>
+    },
+    gen_server:cast(whereis(?SERVER), {create_session, CreateSession}),
+    ok.
+
+send(Arg) when is_integer(Arg) ->
+    Payload = #server_message {
+        message = integer_to_binary(Arg)
+    },
+    gen_server:cast(whereis(?SERVER),{send_message, Payload}),
+    ok;
+send(Arg) when is_list(Arg) ->
+    Payload = #server_message {
+        message = list_to_binary(Arg)
+    },
+    gen_server:cast(whereis(?SERVER),{send_message, Payload}),
     ok.
 
 -spec disconnect() -> ok.
@@ -51,23 +67,25 @@ disconnect() ->
     gen_server:call(whereis(?SERVER), disconnect),
     ok.
 
--spec send_create_session() -> ok.
-send_create_session() ->
-    CreateSession = #create_session {
-        username = <<"TestUser">>
-    },
-    gen_server:cast(whereis(?SERVER), {create_session, CreateSession}).
-
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
-%% This function is never called. We only define it so that
-%% we can use the -behaviour(gen_server) attribute.
 init(_ARgs) ->
     lager:info("sockclient init'ed"),
     {ok, #state{}}.
 
+handle_cast({send_message, Payload}, #state{socket = Socket} = State)
+    when Socket =/= undefined ->
+    Req = #req {
+        type = server_message,
+        server_message_data = Payload
+    },
+    Data = utils:add_envelope(Req),
+
+    gen_tcp:send(Socket, Data),
+
+    {noreply, State};
 handle_cast({create_session, CreateSession}, #state{socket = Socket} = State)
     when Socket =/= undefined ->
     Req = #req {
@@ -95,9 +113,9 @@ handle_info(Message, State) ->
 
 handle_call(connect, _From, State) ->
     {ok, Host} = application:get_env(erl_playground, tcp_host),
+    {ok, Addr} = inet:parse_address(Host),
     {ok, Port} = application:get_env(erl_playground, tcp_port),
-
-    {ok, Socket} = gen_tcp:connect(Host, Port, [binary, {packet, 2}]),
+    {ok, Socket} = gen_tcp:connect(Addr, Port, [binary, {packet, 2}]),
 
     {reply, normal, State#state{socket = Socket}};
 handle_call(disconnect, _From, #state{socket = Socket} = State)
@@ -132,5 +150,5 @@ process_packet(#req{ type = Type } = Req, State, _Now)
             message = Message
         }
     } = Req,
-    _ = lager:info("server_message received: ~p", [Message]),
+    _ = lager:info("server_message received: ~p", [binary_to_list(Message)]),
     State.

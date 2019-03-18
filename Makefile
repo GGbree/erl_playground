@@ -36,10 +36,13 @@ endif
 # Rules to build the system
 # =============================================================================
 
-all: distclean deps release
+all: distclean reload
 
-deps:
-	- $(REBAR3) compile
+reload: deps-both rel-both
+
+deps-both:
+	- $(REBAR3) as server compile
+	- $(REBAR3) as client compile
 
 # usage:
 # git checkout ${GITFROM}; make release ; git checkout ${GITTO} ; make release
@@ -67,6 +70,10 @@ test:
 
 release: #gpg/secret-reveal
 	- $(REBAR3) release
+
+rel-both:
+	- $(REBAR3) as server release
+	- $(REBAR3) as client release
 
 tar: gpg/secret-reveal
 	- $(REBAR3) tar
