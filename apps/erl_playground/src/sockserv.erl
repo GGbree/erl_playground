@@ -31,7 +31,8 @@
 -record(state, {
     socket :: any(), %ranch_transport:socket(),
     transport,
-    username :: list()
+    username :: list(),
+    echoing :: integer()
 }).
 -type state() :: #state{}.
 
@@ -49,11 +50,6 @@
 start() ->
     {ok, Port} = application:get_env(erl_playground, tcp_port),
     {ok, MaxConnections} = application:get_env(erl_playground, max_connections),
-    {ok, Pool} = application:get_env(erl_playground, pools),
-    PoolSpecs = lists:map(fun([Name, SizeArgs, WorkerArgs]) ->
-            PoolArgs = [{name, {local, Name}}, {worker_module, operator}] ++ SizeArgs,
-            poolboy:child_spec(Name, PoolArgs, WorkerArgs)
-        end, Pools),
 
     TcpOptions = [
         {backlog, 100}
@@ -156,7 +152,8 @@ process_packet(#req{ type = Type } = Req, {ok, #state{socket = Socket, transport
     NewState = {ok, #state{
         socket = Socket,
         transport = Transport,
-        username = binary_to_list(UserName)
+        username = binary_to_list(UserName),
+        echoing = 0
     }},
     sendResponse(create,NewState),
     NewState;
@@ -168,8 +165,8 @@ process_packet(#req{ type = Type } = Req, State, _Now)
         }
     } = Req,
     lager:info("client message:~s", [Message]),
-    sendResponse(Message, State),
-    State.
+    NewState = sendResponse(Message, State),
+    NewState.
 
 
 sendResponse(create, State = {ok, #state{socket = Socket, transport = Transport}}) ->
@@ -182,6 +179,9 @@ sendResponse(create, State = {ok, #state{socket = Socket, transport = Transport}
     Data = utils:add_envelope(Response),
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
+    State;
+sendResponse(_, State = {ok, #state{socket = Socket, transport = Transport, echoing = Echo}})
+    when Echo > 0 ->
     ok;
 sendResponse(<<"1">>, State = {ok, #state{socket = Socket, transport = Transport}}) ->
     Response = #req{
@@ -193,7 +193,7 @@ sendResponse(<<"1">>, State = {ok, #state{socket = Socket, transport = Transport
     Data = utils:add_envelope(Response),
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
-    ok;
+    State;
 sendResponse(<<"2">>, State = {ok, #state{socket = Socket, transport = Transport}}) ->
     Response = #req{
         type = server_message,
@@ -204,9 +204,21 @@ sendResponse(<<"2">>, State = {ok, #state{socket = Socket, transport = Transport
     Data = utils:add_envelope(Response),
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
-    ok;
+    State;
 sendResponse(<<"3">>, State = {ok, #state{socket = Socket, transport = Transport}}) ->
-    ok;
+    Response = #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = stringRespond(answer,State)
+        }
+    },
+    Data = utils:add_envelope(Response),
+    Transport:send(Socket,Data),
+    lager:info("sending ~p", [Response]),
+    NewState = {ok, #state{
+        echoing = 1
+    }},
+    NewState;
 sendResponse(<<"4">>, State = {ok, #state{socket = Socket, transport = Transport}}) ->
     Response = #req{
         type = server_message,
@@ -217,7 +229,7 @@ sendResponse(<<"4">>, State = {ok, #state{socket = Socket, transport = Transport
     Data = utils:add_envelope(Response),
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
-    ok.
+    State.
 
 stringRespond(menu, {ok, #state{username = Username}}) ->
     T1 = <<"\nHello ">>,
@@ -225,7 +237,7 @@ stringRespond(menu, {ok, #state{username = Username}}) ->
     [T1, Username, T2];
 
 stringRespond(weather, _State) ->
-    T1 = <<"\nThe weather forecast for today is ">>
+    T1 = <<"\nThe weather forecast for today is ">>,
     List = ["sunny", "rainy", "cloudy", "stormy"],
     [T1, list_to_binary(lists:nth(rand:uniform(length(List)), List))];
 
