@@ -29,6 +29,26 @@ open_envelope(Packet) ->
             undefined
     end.
 
+-spec extract_payload(Req :: #req{} -> {ok, {Type :: atom(), Payload :: binary()}}).
+extract_payload(#req{ type = Type } = Req)
+    when Type =:= create_session ->
+    #req{
+        create_session_data = #create_session {
+            username = Payload
+        }
+    } = Req,
+    {ok, {create_session, Payload}};
+extract_payload(#req{ type = Type } = Req)
+    when Type =:= server_message ->
+    #req{
+        server_message_data = #server_message {
+            message = Payload
+        }
+    } = Req,
+    {ok, {server_message, Payload}};
+extract_payload(_) ->
+    {ok,{undefined, undefined}}.
+
 -spec unix_timestamp() -> non_neg_integer().
 unix_timestamp() ->
     {Msec, Sec, _} = os:timestamp(),
