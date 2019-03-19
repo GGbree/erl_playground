@@ -6,7 +6,7 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([add_envelope/1, open_envelope/1]).
+-export([add_envelope/1, open_envelope/1, extract_payload/1]).
 -export([unix_timestamp/0]).
 
 %% ------------------------------------------------------------------
@@ -29,7 +29,7 @@ open_envelope(Packet) ->
             undefined
     end.
 
--spec extract_payload(Req :: #req{} -> {ok, {Type :: atom(), Payload :: binary()}}).
+-spec extract_payload(Req :: #req{}) -> {ok, {Type :: atom(), Payload :: binary()}}.
 extract_payload(#req{ type = Type } = Req)
     when Type =:= create_session ->
     #req{

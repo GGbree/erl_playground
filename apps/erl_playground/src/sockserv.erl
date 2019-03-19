@@ -142,7 +142,7 @@ code_change(_OldVsn, State, _Extra) ->
 process_packet({undefined,undefined}, State, _Now) ->
     _ = lager:notice("client sent invalid packet, ignoring ~p",[State]),
     State;
-process_packet({create_session, UserName}}, {ok, #state{socket = Socket, transport = Transport, username = undefined}}, _Now) ->
+process_packet({create_session, UserName}, {ok, #state{socket = Socket, transport = Transport, username = undefined}}, _Now) ->
     _ = lager:info("create_session received from ~p", [UserName]),
     NewState = {ok, #state{
         socket = Socket,
@@ -150,7 +150,7 @@ process_packet({create_session, UserName}}, {ok, #state{socket = Socket, transpo
         username = binary_to_list(UserName),
         echoing = 0
     }},
-    sendResponse(create,NewState),
+    elaborateResponse(create,NewState),
     NewState;
 process_packet({server_message, Message}, State, _Now) ->
     lager:info("client message:~s", [Message]),
