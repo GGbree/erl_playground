@@ -120,13 +120,14 @@ handle_info({tcp, _Port, Packet}, State = #state{socket = Socket}) ->
 
     {ok, {Type, Payload}} = utils:extract_payload(Req),
     NewState = process_packet({Type, Payload}, State, utils:unix_timestamp()),
+    lager:notice("~p",[NewState]),
     ok = inet:setopts(Socket, [{active, once}]),
 
     {noreply, NewState};
 handle_info({tcp_closed, _Port}, State) ->
     {stop, normal, State};
 handle_info(Message, State) ->
-    _ = lager:notice("unknown handle_info ~p", [Message]),
+    _ = lager:notice("unknown handle_info ~p, ~p", [Message, State]),
     {noreply, State}.
 
 handle_call(Message, _From, State) ->
@@ -151,20 +152,20 @@ code_change(_OldVsn, State, _Extra) ->
 process_packet({undefined,undefined}, State, _Now) ->
     _ = lager:notice("client sent invalid packet, ignoring ~p",[State]),
     State;
-process_packet({create_session, UserName}, #state{socket = Socket, transport = Transport, username = undefined}, _Now) ->
+process_packet({create_session, UserName}, #state{socket = Socket, transport = Transport, username = undefined, operator = Operator}, _Now) ->
     _ = lager:info("create_session received from ~p", [UserName]),
     NewState = #state{
         socket = Socket,
         transport = Transport,
-        username = binary_to_list(UserName)
+        username = binary_to_list(UserName),
+        operator = Operator
     },
     sendResponse(create, #{create => menu}, NewState),
     NewState;
 process_packet({server_message, Message}, State, _Now) ->
-    lager:info("client message:~s", [Message]),
     Map = #{<<"1">> => weather, <<"2">> => answer, <<"3">> => echo, <<"4">> => menu},
     sendResponse(Message, Map, State),
-    handleSpecialState(maps:get(Message, Map), State).
+    handleSpecialState(Message, State).
 
 
 sendResponse(Message, _Map, State = #state{operator = {_, Worker, Echo}})
@@ -177,20 +178,29 @@ sendResponse(Message, Map, State) ->
     sendData(Response, State),
     ok.
 
-handleSpecialState(echo, #state{operator = {Module, _, Echo}}) 
+handleSpecialState(<<"3">>, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, _, Echo}}) 
     when Echo =:= 0 ->
     Operator = {Module, poolboy:checkout(Module), 1},
     %% TODO poolboy operator logic
-    {#state.socket,#state.transport,#state.username,Operator};
-handleSpecialState(_, #state{operator = {Module, Worker, Echo}})
-    when Echo > 3 ->
+    #state{ socket = Socket,
+            transport = Transport, 
+            username = Username, 
+            operator = Operator};
+handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo}})
+    when Echo > 2 ->
     poolboy:checkin(Module, Worker),
     Operator = {Module, undefined, 0},
-    {#state.socket, #state.transport, #state.username, Operator};
-handleSpecialState(_, #state{operator = {Module, Worker, Echo}})
+    #state{ socket = Socket,
+            transport = Transport, 
+            username = Username, 
+            operator = Operator};
+handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo}})
     when Echo > 0 ->
     Operator = {Module, Worker, Echo + 1},
-    {#state.socket, #state.transport, #state.username, Operator};
+    #state{ socket = Socket,
+            transport = Transport, 
+            username = Username, 
+            operator = Operator};
 handleSpecialState(_, State) ->
     State.
 
