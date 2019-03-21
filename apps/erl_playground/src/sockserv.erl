@@ -167,49 +167,72 @@ process_packet({server_message, Message}, State, _Now) ->
 
 elaborateResponse(Message, State) ->
     Map = #{create => menu, <<"1">> => weather, <<"2">> => answer, <<"3">> => echo, <<"4">> => menu},
-    NewState = sendResponse(Message, Map, State),
+    sendResponse(Message, Map, State),
+    NewState = handleSpecialState(maps:get(Message, Map), State),
     NewState.
 
-sendResponse(Message, _Map, State = {ok, #state{socket = Socket, transport = Transport, operator = {_, operator = Worker, echoing = Echo}}})
+sendResponse(Message, _Map, #state.operator = {_, Worker, Echo})
     when Echo > 0 ->
-    Response = #req{
-        type = server_message,
-        server_message_data = #server_message {
-            message = gen_server:call(Worker, {Message, echo})
-        }
-    },
-    Data = utils:add_envelope(Response),
-    Transport:send(Socket,Data),
-    lager:info("sending ~p", [Response]),
-    State;
-sendResponse(Message, Map, State = {ok, State = #state{socket = Socket, transport = Transport}}) ->
-    Response = #req{
-        type = server_message,
-        server_message_data = #server_message {
-            message = stringRespond(maps:get(Message, Map),State)
-        }
-    },
-    Data = utils:add_envelope(Response),
-    Transport:send(Socket,Data),
-    lager:info("sending ~p", [Response]),
-    NewState = enterSpecialState(maps:get(Message, Map), State),
-    NewState.
+    Response = matchResponse(gen_server:call(Worker, {Message, echo})),
+    sendData(Response, State),
+    ok;
+sendResponse(Message, Map, State) ->
+    Response = matchResponse(stringResponse(maps:get(Message, Map),State)),
+    sendData(Response, State),
+    ok.
 
-stringRespond(menu, {ok, #state{username = Username}}) ->
+handleSpecialState(echo, State = #state{operator = {Module, _, Echo}}) 
+    when Echo =:= 0 ->
+    Operator = {Module, poolboy:checkout(Module), 1},
+    %% TODO poolboy operator logic
+    {#state.socket,#state.transport,#state.username,Operator};
+handleSpecialState(_, State = #state{operator = {Module, _, _}})
+    when Echo > 3 ->
+    %% TODO poolboy:checkin
+    Operator = {Module, undefined, 0},
+    {#state.socket, #state.transport, #state.username, Operator};
+handleSpecialState(_, State = #state{operator = {Module, Worker, Echo}})
+    when Echo > 0 ->
+    Operator = {Module, Worker, Echo + 1}
+    {#state.socket, #state.transport, #state.username, Operator};
+handleSpecialState(_, State) ->
+    State.
+
+
+stringResponse(menu, {ok, #state{username = Username}}) ->
     T1 = <<"\nHello ">>,
     T2 = <<", this is an automatic responder:\nSend 1 to recieve the weather forecast\nSend 2 to recieve the answer to the ultimate question of Life, the Universe and Everything\nSend 3 to contact an operator\nSend 4 to repete this message">>,
     [T1, Username, T2];
 
-stringRespond(weather, _State) ->
-    T1 = <<"\nThe weather forecast for today is ">>,
+stringResponse(weather, _State) ->
+    T1 = <<"\nThe weather today will be ">>,
     List = ["sunny", "cloudy", "rainy", "stormy"],
     [T1, list_to_binary(lists:nth(rand:uniform(length(List)), List))];
 
-stringRespond(answer, _State) ->
+stringResponse(answer, _State) ->
     <<"\nThe answer to the ultimate question of Life, the Universe and Everything is...\n42">>;
 
-stringRespond(echo, _State) ->
+stringResponse(echo, _State) ->
     <<"\nAnswering operator...">>;
 
-stringRespond(_, _State) ->
+stringResponse(_, _State) ->
     <<"\nCommand not understood">>.
+
+%% ------------------------------------------------------------------
+%% Auxiliary functions
+%% ------------------------------------------------------------------
+
+matchResponse(Fun)
+    when Echo > 0 ->
+    #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = Fun
+        }
+    }.
+
+sendData(Response, #state{socket = Socket, transport = Transport}) ->
+    Data = utils:add_envelope(Response),
+    Transport:send(Socket,Data),
+    lager:info("sending ~p", [Response]),
+    ok.
