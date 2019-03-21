@@ -55,6 +55,12 @@ send(Arg) when is_integer(Arg) ->
     },
     gen_server:cast(whereis(?SERVER),{send_message, Payload}),
     ok;
+send(Arg) when is_atom(Arg) ->
+    Payload = #server_message {
+        message = atom_to_binary(Arg,utf8)
+    },
+    gen_server:cast(whereis(?SERVER),{send_message, Payload}),
+    ok;
 send(Arg) when is_list(Arg) ->
     Payload = #server_message {
         message = list_to_binary(Arg)

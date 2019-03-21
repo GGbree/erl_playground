@@ -28,12 +28,16 @@
 %% Record Definitions
 %% ------------------------------------------------------------------
 
+-type operator() ::
+    {Module :: pid(), Worker :: pid(), Echoing :: integer()}.
+
 -record(state, {
     socket :: any(), %ranch_transport:socket(),
     transport,
     username :: list(),
-    echoing :: integer()
+    operator :: operator()
 }).
+
 -type state() :: #state{}.
 
 %% ------------------------------------------------------------------
@@ -84,9 +88,11 @@ init(Ref, Socket, Transport, [_ProxyProtocol]) ->
     Opts = [{packet, 2}, {packet_size, 16384}, {active, once}, {nodelay, true}],
     _ = Transport:setopts(Socket, Opts),
 
+    {ok, [{Name,[{size,MaxSize},{max_overflow,MaxOverflow}],[]}]} = application:get_env(erl_playground, pools),
     State = {ok, #state{
         socket = Socket,
-        transport = Transport
+        transport = Transport,
+        operator = {start_pool(Name,MaxSize,MaxOverflow), undefined, 0}
     }},
 
     gen_server:enter_loop(?MODULE, [], State).
@@ -147,8 +153,7 @@ process_packet({create_session, UserName}, {ok, #state{socket = Socket, transpor
     NewState = {ok, #state{
         socket = Socket,
         transport = Transport,
-        username = binary_to_list(UserName),
-        echoing = 0
+        username = binary_to_list(UserName)
     }},
     elaborateResponse(create,NewState),
     NewState;
@@ -162,9 +167,18 @@ elaborateResponse(Message, State) ->
     NewState = sendResponse(Message, Map, State),
     NewState.
 
-sendResponse(_, _Map, State = {ok, #state{socket = Socket, transport = Transport, echoing = Echo}})
+sendResponse(Message, _Map, State = {ok, #state{socket = Socket, transport = Transport, operator = {_, operator = Worker, echoing = Echo}}})
     when Echo > 0 ->
-    ok;
+    Response = #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = gen_server:call(Worker, {Message, echo})
+        }
+    },
+    Data = utils:add_envelope(Response),
+    Transport:send(Socket,Data),
+    lager:info("sending ~p", [Response]),
+    State;
 sendResponse(Message, Map, State = {ok, #state{socket = Socket, transport = Transport}}) ->
     Response = #req{
         type = server_message,
@@ -184,11 +198,19 @@ stringRespond(menu, {ok, #state{username = Username}}) ->
 
 stringRespond(weather, _State) ->
     T1 = <<"\nThe weather forecast for today is ">>,
-    List = ["sunny", "rainy", "cloudy", "stormy"],
+    List = ["sunny", "cloudy", "rainy", "stormy"],
     [T1, list_to_binary(lists:nth(rand:uniform(length(List)), List))];
 
 stringRespond(answer, _State) ->
     <<"\nThe answer to the ultimate question of Life, the Universe and Everything is...\n42">>;
 
+stringRespond(echo, _State) ->
+    <<"\nAnswering operator...">>;
+
 stringRespond(_, _State) ->
     <<"\nCommand not understood">>.
+
+start_pool(Name, MaxSize, MaxOverflow) ->
+    poolboy:start_link([{name, {local, Name}},
+                        {worker_module, operator},
+                        {size, MaxSize}, {max_overflow, MaxOverflow}]).
