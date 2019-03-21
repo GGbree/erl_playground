@@ -92,7 +92,10 @@ init(Ref, Socket, Transport, [_ProxyProtocol]) ->
     State = {ok, #state{
         socket = Socket,
         transport = Transport,
-        operator = {start_pool(Name,MaxSize,MaxOverflow), undefined, 0}
+        operator = {poolboy:start_link([{name, {local, Name}},
+                        {worker_module, operator},
+                        {size, MaxSize}, {max_overflow, MaxOverflow}]), 
+                    undefined, 0}
     }},
 
     gen_server:enter_loop(?MODULE, [], State).
@@ -179,7 +182,7 @@ sendResponse(Message, _Map, State = {ok, #state{socket = Socket, transport = Tra
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
     State;
-sendResponse(Message, Map, State = {ok, #state{socket = Socket, transport = Transport}}) ->
+sendResponse(Message, Map, State = {ok, State = #state{socket = Socket, transport = Transport}}) ->
     Response = #req{
         type = server_message,
         server_message_data = #server_message {
@@ -189,7 +192,8 @@ sendResponse(Message, Map, State = {ok, #state{socket = Socket, transport = Tran
     Data = utils:add_envelope(Response),
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
-    State.
+    NewState = enterSpecialState(maps:get(Message, Map), State),
+    NewState.
 
 stringRespond(menu, {ok, #state{username = Username}}) ->
     T1 = <<"\nHello ">>,
@@ -209,8 +213,3 @@ stringRespond(echo, _State) ->
 
 stringRespond(_, _State) ->
     <<"\nCommand not understood">>.
-
-start_pool(Name, MaxSize, MaxOverflow) ->
-    poolboy:start_link([{name, {local, Name}},
-                        {worker_module, operator},
-                        {size, MaxSize}, {max_overflow, MaxOverflow}]).
