@@ -89,14 +89,14 @@ init(Ref, Socket, Transport, [_ProxyProtocol]) ->
     _ = Transport:setopts(Socket, Opts),
 
     {ok, [{Name,[{size,MaxSize},{max_overflow,MaxOverflow}],[]}]} = application:get_env(erl_playground, pools),
-    State = {ok, #state{
+    {ok, Module} = poolboy:start_link([{name, {local, Name}},
+                        {worker_module, operator},
+                        {size, MaxSize}, {max_overflow, MaxOverflow}]),
+    State = #state{
         socket = Socket,
         transport = Transport,
-        operator = {poolboy:start_link([{name, {local, Name}},
-                        {worker_module, operator},
-                        {size, MaxSize}, {max_overflow, MaxOverflow}]), 
-                    undefined, 0}
-    }},
+        operator = {Module, undefined, 0}
+    },
 
     gen_server:enter_loop(?MODULE, [], State).
 
@@ -115,7 +115,7 @@ handle_cast(Request, State) ->
 handle_info({tcp, _Port, <<>>}, State) ->
     _ = lager:notice("empty handle_info state: ~p", [State]),
     {noreply, State};
-handle_info({tcp, _Port, Packet}, State = {ok, #state{socket = Socket}}) ->
+handle_info({tcp, _Port, Packet}, State = #state{socket = Socket}) ->
     Req = utils:open_envelope(Packet),
 
     {ok, {Type, Payload}} = utils:extract_payload(Req),
@@ -151,27 +151,23 @@ code_change(_OldVsn, State, _Extra) ->
 process_packet({undefined,undefined}, State, _Now) ->
     _ = lager:notice("client sent invalid packet, ignoring ~p",[State]),
     State;
-process_packet({create_session, UserName}, {ok, #state{socket = Socket, transport = Transport, username = undefined}}, _Now) ->
+process_packet({create_session, UserName}, #state{socket = Socket, transport = Transport, username = undefined}, _Now) ->
     _ = lager:info("create_session received from ~p", [UserName]),
-    NewState = {ok, #state{
+    NewState = #state{
         socket = Socket,
         transport = Transport,
         username = binary_to_list(UserName)
-    }},
-    elaborateResponse(create,NewState),
+    },
+    sendResponse(create, #{create => menu}, NewState),
     NewState;
 process_packet({server_message, Message}, State, _Now) ->
     lager:info("client message:~s", [Message]),
-    NewState = elaborateResponse(Message, State),
-    NewState.
-
-elaborateResponse(Message, State) ->
-    Map = #{create => menu, <<"1">> => weather, <<"2">> => answer, <<"3">> => echo, <<"4">> => menu},
+    Map = #{<<"1">> => weather, <<"2">> => answer, <<"3">> => echo, <<"4">> => menu},
     sendResponse(Message, Map, State),
-    NewState = handleSpecialState(maps:get(Message, Map), State),
-    NewState.
+    handleSpecialState(maps:get(Message, Map), State).
 
-sendResponse(Message, _Map, #state.operator = {_, Worker, Echo})
+
+sendResponse(Message, _Map, State = #state{operator = {_, Worker, Echo}})
     when Echo > 0 ->
     Response = matchResponse(gen_server:call(Worker, {Message, echo})),
     sendData(Response, State),
@@ -181,25 +177,25 @@ sendResponse(Message, Map, State) ->
     sendData(Response, State),
     ok.
 
-handleSpecialState(echo, State = #state{operator = {Module, _, Echo}}) 
+handleSpecialState(echo, #state{operator = {Module, _, Echo}}) 
     when Echo =:= 0 ->
     Operator = {Module, poolboy:checkout(Module), 1},
     %% TODO poolboy operator logic
     {#state.socket,#state.transport,#state.username,Operator};
-handleSpecialState(_, State = #state{operator = {Module, _, _}})
+handleSpecialState(_, #state{operator = {Module, Worker, Echo}})
     when Echo > 3 ->
-    %% TODO poolboy:checkin
+    poolboy:checkin(Module, Worker),
     Operator = {Module, undefined, 0},
     {#state.socket, #state.transport, #state.username, Operator};
-handleSpecialState(_, State = #state{operator = {Module, Worker, Echo}})
+handleSpecialState(_, #state{operator = {Module, Worker, Echo}})
     when Echo > 0 ->
-    Operator = {Module, Worker, Echo + 1}
+    Operator = {Module, Worker, Echo + 1},
     {#state.socket, #state.transport, #state.username, Operator};
 handleSpecialState(_, State) ->
     State.
 
 
-stringResponse(menu, {ok, #state{username = Username}}) ->
+stringResponse(menu, #state{username = Username}) ->
     T1 = <<"\nHello ">>,
     T2 = <<", this is an automatic responder:\nSend 1 to recieve the weather forecast\nSend 2 to recieve the answer to the ultimate question of Life, the Universe and Everything\nSend 3 to contact an operator\nSend 4 to repete this message">>,
     [T1, Username, T2];
@@ -222,14 +218,14 @@ stringResponse(_, _State) ->
 %% Auxiliary functions
 %% ------------------------------------------------------------------
 
-matchResponse(Fun)
-    when Echo > 0 ->
-    #req{
+matchResponse(Fun) ->
+    Req = #req{
         type = server_message,
         server_message_data = #server_message {
             message = Fun
         }
-    }.
+    },
+    Req.
 
 sendData(Response, #state{socket = Socket, transport = Transport}) ->
     Data = utils:add_envelope(Response),
