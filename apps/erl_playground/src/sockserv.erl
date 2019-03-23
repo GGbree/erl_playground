@@ -29,7 +29,7 @@
 %% ------------------------------------------------------------------
 
 -type operator() ::
-    {Module :: pid(), Worker :: pid(), Echoing :: integer()}.
+    {Module :: pid(), Worker :: pid(), Echoing :: integer(), Timeout :: integer()}.
 
 -record(state, {
     socket :: any(), %ranch_transport:socket(),
@@ -89,13 +89,13 @@ init(Ref, Socket, Transport, [_ProxyProtocol]) ->
     _ = Transport:setopts(Socket, Opts),
 
     {ok, [{Name,[{size,MaxSize},{max_overflow,MaxOverflow}],[]}]} = application:get_env(erl_playground, pools),
-    {ok, Module} = poolboy:start_link([{name, {local, Name}},
-                        {worker_module, operator},
-                        {size, MaxSize}, {max_overflow, MaxOverflow}]),
+    Module = startOperatorModule(poolboy:start_link([{name, {local, Name}},
+                                {worker_module, operator},
+                                {size, MaxSize}, {max_overflow, MaxOverflow}])),
     State = #state{
         socket = Socket,
         transport = Transport,
-        operator = {Module, undefined, 0}
+        operator = {Module, undefined, 0, undefined}
     },
 
     gen_server:enter_loop(?MODULE, [], State).
@@ -168,35 +168,43 @@ process_packet({server_message, Message}, State, _Now) ->
     handleSpecialState(Message, State).
 
 
-sendResponse(Message, _Map, State = #state{operator = {_, Worker, Echo}})
+sendResponse(Message, _Map, State = #state{username = Username, operator = {_, Worker, Echo, Timestamp}})
     when Echo > 0 ->
-    Response = matchResponse(gen_server:call(Worker, {Message, echo})),
+    SecondsPassed = erlang:system_time(second) - Timestamp,
+    if 
+        SecondsPassed < 10 -> Response = matchResponse(gen_server:call(Worker, {Message, echo}));
+        SecondsPassed >= 10 -> Response = matchResponse(stringResponse(op_disc, Username))
+    end,
     sendData(Response, State),
     ok;
-sendResponse(Message, Map, State) ->
-    Response = matchResponse(stringResponse(maps:get(Message, Map),State)),
+sendResponse(Message, Map, State = #state{username = Username}) ->
+    Response = matchResponse(stringResponse(maps:get(Message, Map),Username)),
     sendData(Response, State),
     ok.
 
-handleSpecialState(<<"3">>, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, _, Echo}}) 
+handleSpecialState(<<"3">>, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, _, Echo, Timeout}}) 
     when Echo =:= 0 ->
-    Operator = {Module, poolboy:checkout(Module), 1},
+    Operator = {Module, poolboy:checkout(Module), 1, erlang:system_time(second)},
     %% TODO poolboy operator logic
     #state{ socket = Socket,
             transport = Transport, 
             username = Username, 
             operator = Operator};
-handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo}})
+handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo, _Timestamp}})
     when Echo > 2 ->
     poolboy:checkin(Module, Worker),
-    Operator = {Module, undefined, 0},
+    Operator = {Module, undefined, 0, undefined},
     #state{ socket = Socket,
             transport = Transport, 
             username = Username, 
             operator = Operator};
-handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo}})
+handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo, Timestamp}})
     when Echo > 0 ->
-    Operator = {Module, Worker, Echo + 1},
+    SecondsPassed = erlang:system_time(second) - Timestamp,
+    if 
+        SecondsPassed < 10 -> Operator = {Module, Worker, Echo + 1, Timestamp};
+        SecondsPassed >= 10 -> Operator = {Module, undefined, 0, undefined}
+    end,
     #state{ socket = Socket,
             transport = Transport, 
             username = Username, 
@@ -205,23 +213,28 @@ handleSpecialState(_, State) ->
     State.
 
 
-stringResponse(menu, #state{username = Username}) ->
+stringResponse(menu, Username) ->
     T1 = <<"\nHello ">>,
     T2 = <<", this is an automatic responder:\nSend 1 to recieve the weather forecast\nSend 2 to recieve the answer to the ultimate question of Life, the Universe and Everything\nSend 3 to contact an operator\nSend 4 to repete this message">>,
     [T1, Username, T2];
 
-stringResponse(weather, _State) ->
+stringResponse(weather, _Username) ->
     T1 = <<"\nThe weather today will be ">>,
     List = ["sunny", "cloudy", "rainy", "stormy"],
     [T1, list_to_binary(lists:nth(rand:uniform(length(List)), List))];
 
-stringResponse(answer, _State) ->
+stringResponse(answer, _Username) ->
     <<"\nThe answer to the ultimate question of Life, the Universe and Everything is...\n42">>;
 
-stringResponse(echo, _State) ->
+stringResponse(echo, _Username) ->
     <<"\nAnswering operator...">>;
 
-stringResponse(_, _State) ->
+stringResponse(op_disc, Username) ->
+    T1 = <<"\nOperator timeout, disconnected from service">>,
+    T2 = stringResponse(menu, Username),
+    [T1, T2];
+
+stringResponse(_, _Username) ->
     <<"\nCommand not understood">>.
 
 %% ------------------------------------------------------------------
@@ -242,3 +255,6 @@ sendData(Response, #state{socket = Socket, transport = Transport}) ->
     Transport:send(Socket,Data),
     lager:info("sending ~p", [Response]),
     ok.
+
+startOperatorModule({ok, Module}) -> Module;
+startOperatorModule({error,{already_started, Module}}) -> Module.
