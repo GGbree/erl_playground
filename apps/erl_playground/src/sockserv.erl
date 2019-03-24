@@ -120,7 +120,6 @@ handle_info({tcp, _Port, Packet}, State = #state{socket = Socket}) ->
 
     {ok, {Type, Payload}} = utils:extract_payload(Req),
     NewState = process_packet({Type, Payload}, State, utils:unix_timestamp()),
-    lager:notice("~p",[NewState]),
     ok = inet:setopts(Socket, [{active, once}]),
 
     {noreply, NewState};
@@ -171,47 +170,30 @@ process_packet({server_message, Message}, State, _Now) ->
 sendResponse(Message, _Map, State = #state{username = Username, operator = {_, Worker, Echo, Timestamp}})
     when Echo > 0 ->
     SecondsPassed = erlang:system_time(second) - Timestamp,
-    if 
-        SecondsPassed < 10 -> Response = matchResponse(gen_server:call(Worker, {Message, echo}));
-        SecondsPassed >= 10 -> Response = matchResponse(stringResponse(op_disc, Username))
-    end,
+    Response =  if 
+                    SecondsPassed < 10 -> matchResponse(gen_server:call(Worker, {Message, echo}));
+                    SecondsPassed >= 10 -> matchResponse(stringResponse(op_disc, Username))
+                end,
     sendData(Response, State),
     ok;
 sendResponse(Message, Map, State = #state{username = Username}) ->
-    Response = matchResponse(stringResponse(maps:get(Message, Map),Username)),
+    Response =  try
+                    matchResponse(stringResponse(maps:get(Message, Map),Username))
+                catch
+                    _:_ ->
+                        matchResponse(stringResponse(not_understood,""))
+                end,
     sendData(Response, State),
     ok.
 
-handleSpecialState(<<"3">>, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, _, Echo, Timeout}}) 
-    when Echo =:= 0 ->
-    Operator = {Module, poolboy:checkout(Module), 1, erlang:system_time(second)},
-    %% TODO poolboy operator logic
-    #state{ socket = Socket,
-            transport = Transport, 
-            username = Username, 
-            operator = Operator};
-handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo, _Timestamp}})
-    when Echo > 2 ->
-    poolboy:checkin(Module, Worker),
-    Operator = {Module, undefined, 0, undefined},
-    #state{ socket = Socket,
-            transport = Transport, 
-            username = Username, 
-            operator = Operator};
-handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo, Timestamp}})
-    when Echo > 0 ->
-    SecondsPassed = erlang:system_time(second) - Timestamp,
-    if 
-        SecondsPassed < 10 -> Operator = {Module, Worker, Echo + 1, Timestamp};
-        SecondsPassed >= 10 -> Operator = {Module, undefined, 0, undefined}
-    end,
-    #state{ socket = Socket,
-            transport = Transport, 
-            username = Username, 
-            operator = Operator};
-handleSpecialState(_, State) ->
-    State.
-
+matchResponse(Fun) ->
+    Req = #req{
+        type = server_message,
+        server_message_data = #server_message {
+            message = Fun
+        }
+    },
+    Req.
 
 stringResponse(menu, Username) ->
     T1 = <<"\nHello ">>,
@@ -234,26 +216,63 @@ stringResponse(op_disc, Username) ->
     T2 = stringResponse(menu, Username),
     [T1, T2];
 
+stringResponse(op_fail, Username) ->
+    T1 = <<"\nCould not connect to operator, every operator is busy">>,
+    T2 = <<"\nReturning to main menu">>,
+    T3 = stringResponse(menu, Username),
+    [T1, T2, T3];
+
+stringResponse(op_connect, _Username) ->
+    <<"\nConnected to operator for 10 seconds (max 3 messages)">>;
+
 stringResponse(_, _Username) ->
     <<"\nCommand not understood">>.
+
+
+handleSpecialState(<<"3">>, State = #state{socket = Socket, transport = Transport, username = Username, operator = {Module, _, Echo, _}}) 
+    when Echo =:= 0 ->
+    Operator =  try poolboy:checkout(Module) of
+                    _ ->
+                        sendResponse(op_connect, #{op_connect => op_connect}, State),
+                        {Module, poolboy:checkout(Module), 1 , erlang:system_time(second)}
+                catch
+                    _:_ ->
+                        sendResponse(op_fail, #{op_fail => op_fail}, State),
+                        {Module, undefined, 0, undefined}
+                end,
+    #state{ socket = Socket,
+            transport = Transport, 
+            username = Username, 
+            operator = Operator};
+handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo, _Timestamp}})
+    when Echo > 2 ->
+    poolboy:checkin(Module, Worker),
+    Operator = {Module, undefined, 0, undefined},
+    #state{ socket = Socket,
+            transport = Transport, 
+            username = Username, 
+            operator = Operator};
+handleSpecialState(_, #state{socket = Socket, transport = Transport, username = Username, operator = {Module, Worker, Echo, Timestamp}})
+    when Echo > 0 ->
+    SecondsPassed = erlang:system_time(second) - Timestamp,
+    Operator =  if 
+                    SecondsPassed < 10 -> {Module, Worker, Echo + 1, Timestamp};
+                    SecondsPassed >= 10 -> {Module, undefined, 0, undefined}
+                end,
+    #state{ socket = Socket,
+            transport = Transport, 
+            username = Username, 
+            operator = Operator};
+handleSpecialState(_, State) ->
+    State.
 
 %% ------------------------------------------------------------------
 %% Auxiliary functions
 %% ------------------------------------------------------------------
 
-matchResponse(Fun) ->
-    Req = #req{
-        type = server_message,
-        server_message_data = #server_message {
-            message = Fun
-        }
-    },
-    Req.
-
 sendData(Response, #state{socket = Socket, transport = Transport}) ->
     Data = utils:add_envelope(Response),
     Transport:send(Socket,Data),
-    lager:info("sending ~p", [Response]),
     ok.
 
 startOperatorModule({ok, Module}) -> Module;

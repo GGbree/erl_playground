@@ -8,7 +8,7 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/0]). -ignore_xref([{start_link, 4}]).
--export([connect/0, send/1, disconnect/0]).
+-export([connect/1, send/1, disconnect/0]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -40,11 +40,20 @@
 start_link() ->
     {ok, _} = gen_server:start_link({local, ?SERVER}, ?CB_MODULE, [], []).
 
--spec connect() -> ok.
-connect() ->
+-spec connect(Arg :: list() | atom()) -> ok.
+connect(Arg) when is_atom(Arg)->
+    UserName = atom_to_binary(Arg, utf8),
     gen_server:call(whereis(?SERVER), connect),
     CreateSession = #create_session {
-        username = <<"TestUser">>
+        username = UserName
+    },
+    gen_server:cast(whereis(?SERVER), {create_session, CreateSession}),
+    ok;
+connect(Arg) when is_list(Arg)->
+    UserName = list_to_binary(Arg),
+    gen_server:call(whereis(?SERVER), connect),
+    CreateSession = #create_session {
+        username = UserName
     },
     gen_server:cast(whereis(?SERVER), {create_session, CreateSession}),
     ok.
