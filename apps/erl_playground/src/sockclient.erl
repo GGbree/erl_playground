@@ -49,6 +49,14 @@ connect(Arg) when is_atom(Arg)->
     },
     gen_server:cast(whereis(?SERVER), {create_session, CreateSession}),
     ok;
+connect(Arg) when is_integer(Arg)->
+    UserName = integer_to_binary(Arg),
+    gen_server:call(whereis(?SERVER), connect),
+    CreateSession = #create_session {
+        username = UserName
+    },
+    gen_server:cast(whereis(?SERVER), {create_session, CreateSession}),
+    ok;
 connect(Arg) when is_list(Arg)->
     UserName = list_to_binary(Arg),
     gen_server:call(whereis(?SERVER), connect),

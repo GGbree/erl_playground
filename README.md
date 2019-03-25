@@ -88,4 +88,61 @@ You have two weeks.
 **Good Luck!**
 
 # Candidate comments
-Please add here everythig you need...
+
+In this project you can find an implementation to the mandatory challenges, the "limited operators" optional challenge, the "test" optional challenge and the "[client](https://github.com/ggbree/erl_playground_client)" optional challenge.
+
+This project was tested in a VM with guest OS Centos 7 (which is compatible with erlang/OTP 19.3). Two profiles were added to the rebar3 config file, the __dedicated client__ and the __dedicated server__. An additional script was also added to the makefile for convenience, the __make reload__ script, that rebuilds both the dedicated client and server profiles.
+
+Since different parameters gets fed inside the erlang VM for the three profiles (server, client and server with client in the same shell) it is **mandatory** to change the absolute path in the -config stanza of both the vm_server.args file and the vm_client.args file.
+
+For example, I worked in the folder __/appserver/erl_playground__, so my config stanza for the server vm is
+```
+-config /appserver/erl_playground/config/server
+```
+Which needs to be changed in
+```
+-config <root project folder>/config/server
+```
+Nowhere in the documentation is reported how to feed a relative path as a vm argument, so that's annoying but necessary.
+
+## Client Module
+
+The sockclient module exposes a 
+```
+connect/1
+```
+function where the argument is the username for the connection. The module also exposes a
+```
+send/1
+```
+function that sends a bytestring to the server once a connection is established. Both functions accept an atom, list or integer as an argument. So a generic session can be initialized with
+```
+sockclient:connect(ggbree).
+sockclient:send(<number>).
+```
+The module assumes that he's connecting to localhost (can be modified in the **config/client.config** file), the [client optional challenge](https://github.com/ggbree/erl_playground_client) does not.
+
+## Server Module
+
+The protocol structure provided is left unchanged, and the pattern matching is done on the unpacked message. The module creates the operator pool as soon as it is called and can assign operators if need be. As requested by the challenge if every operator is busy and no one is able to communicate in 5 seconds the user gets redirected to the main menu. The logic of the program was divided into two parts, one that handles the messages and one that handles the special states. The **state** parameter has information on the different states the client is on. The type **operator** is a convenience type that has all the information on the operator state and it is defined as
+```
+-type operator() ::
+    {Module :: pid(), Worker :: pid(), Echoing :: integer(), Timeout :: integer()}.
+```
+I decided to handle all operator logic in the parent module sockserver, and leave the operator module with just the echo function. To me this approach is clearer because every parameter is apparent and handled in the same place.
+
+## Test suite
+
+The 
+```
+make tests
+```
+command calls the test module and executes the tests in order. The tests aim to prove the correct behaviour of the modules in edge cases.
+
+## Dedicated client
+
+The repository of the dedicated client can be found in
+
+[https://github.com/ggbree/erl_playground_client](https://github.com/ggbree/erl_playground_client)
+
+and more information can be found there.
