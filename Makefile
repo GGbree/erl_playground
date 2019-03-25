@@ -36,7 +36,7 @@ endif
 # Rules to build the system
 # =============================================================================
 
-all: distclean reload
+all: distclean reload compile release
 
 reload: deps-both rel-both
 

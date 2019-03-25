@@ -89,7 +89,7 @@ You have two weeks.
 
 # Candidate comments
 
-In this project you can find an implementation to the mandatory challenges, the "limited operators" optional challenge, the "test" optional challenge and the "[client](https://github.com/ggbree/erl_playground_client)" optional challenge.
+In this project you can find an implementation to the mandatory challenges, the "limited operators" optional challenge and the "[client](https://github.com/ggbree/erl_playground_client)" optional challenge.
 
 This project was tested in a VM with guest OS Centos 7 (which is compatible with erlang/OTP 19.3). Two profiles were added to the rebar3 config file, the __dedicated client__ and the __dedicated server__. An additional script was also added to the makefile for convenience, the __make reload__ script, that rebuilds both the dedicated client and server profiles.
 
@@ -130,14 +130,6 @@ The protocol structure provided is left unchanged, and the pattern matching is d
     {Module :: pid(), Worker :: pid(), Echoing :: integer(), Timeout :: integer()}.
 ```
 I decided to handle all operator logic in the parent module sockserver, and leave the operator module with just the echo function. To me this approach is clearer because every parameter is apparent and handled in the same place.
-
-## Test suite
-
-The 
-```
-make tests
-```
-command calls the test module and executes the tests in order. The tests aim to prove the correct behaviour of the modules in edge cases.
 
 ## Dedicated client
 
